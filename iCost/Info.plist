@@ -16,7 +16,7 @@
 	<key>QWEN_ENDPOINT</key>
 	<string>https://dashscope.aliyuncs.com/compatible-mode/v1</string>
 	<key>QWEN_API_KEY</key>
-	<string></string>
+	<string>sk-2de51f4b27d64cc1b51e8c7bb48dc465</string>
 	<key>QWEN_MODEL</key>
 	<string>qwen3-omni-flash</string>
 </dict>

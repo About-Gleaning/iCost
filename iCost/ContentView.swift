@@ -13,28 +13,29 @@ struct ContentView: View {
     var body: some View {
         TabView {
             BillsListView()
-                .tabItem { Label("账单", systemImage: "list.bullet") }
+                .tabItem { Label("随笔", systemImage: "list.bullet") }
             VoiceRecordView()
-                .tabItem { Label("语音", systemImage: "mic") }
+                .tabItem { Label("AI", systemImage: "mic") }
             CalendarView()
                 .tabItem { Label("日历", systemImage: "calendar") }
-            ChartsRootView()
-                .tabItem { Label("图表", systemImage: "chart.pie") }
         }
     }
 }
 
 struct BillsListView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var bills: [Bill]
-    init() { _bills = Query(sort: [SortDescriptor(\Bill.timestamp, order: .reverse)]) }
+    @State private var bills: [Bill] = []
+    private func refresh() {
+        let descriptor = FetchDescriptor<Bill>(sortBy: [SortDescriptor(\Bill.timestamp, order: .reverse)])
+        if let results = try? modelContext.fetch(descriptor) { bills = results }
+    }
     var body: some View {
         NavigationView {
             List {
                 ForEach(bills) { bill in
                     VStack(alignment: .leading) {
                         HStack {
-                            Text(bill.category.rawValue)
+                            Text(bill.category.cnName)
                             Spacer()
                             Text(String(format: "%.2f", bill.amount))
                         }
@@ -45,8 +46,12 @@ struct BillsListView: View {
                 }
                 .onDelete { indexes in
                     for i in indexes { modelContext.delete(bills[i]) }
+                    NotificationCenter.default.post(name: .BillsChanged, object: nil)
+                    refresh()
                 }
             }
+            .onAppear { refresh() }
+            .onReceive(NotificationCenter.default.publisher(for: .BillsChanged)) { _ in refresh() }
             .navigationTitle("账单")
         }
     }
