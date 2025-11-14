@@ -10,9 +10,16 @@ final class VoiceRecordViewModel: ObservableObject {
     @Published var amountText: String = ""
     @Published var category: Category = Category.other
     @Published var note: String = ""
+    @Published var isIncome: Bool = false
+    @Published var incomeCategory: IncomeCategory = .otherIncome
+    @Published var consumedAt: Date = Date()
     @Published var showConfirm: Bool = false
-    struct EditableBill: Identifiable, Sendable { let id: UUID = UUID(); var amountText: String; var category: Category; var note: String }
+    struct EditableBill: Identifiable, Sendable { let id: UUID = UUID(); var amountText: String; var category: Category; var note: String; var isIncome: Bool; var incomeCategory: IncomeCategory; var consumedAt: Date }
     @Published var parsedItems: [EditableBill] = []
+    @Published var elapsed: TimeInterval = 0
+    @Published var currentLevel: Float = 0
+    @Published var showNoExpenseAlert: Bool = false
+    @Published var noExpenseMessage: String = ""
 
     private let recorder = AudioRecorderService()
     private let speech = SpeechService()
@@ -20,9 +27,11 @@ final class VoiceRecordViewModel: ObservableObject {
     private var recordedURL: URL?
     private var autoSaveAfterStop = false
     private var autoContext: ModelContext?
+    private var startTime: Date?
 
     func startRecording() {
         status = .recording
+        startTime = Date()
         recorder.onMeterUpdate = { [weak self] level in
             DispatchQueue.main.async { self?.appendWave(level) }
         }
@@ -37,7 +46,7 @@ final class VoiceRecordViewModel: ObservableObject {
                 }
             }
         }
-        do { try recorder.start(maxDuration: 60) } catch { status = .failed("录音失败") }
+        do { try recorder.start(maxDuration: 20) } catch { status = .failed("录音失败") }
     }
 
     func stopRecording() { recorder.stop() }
@@ -47,7 +56,13 @@ final class VoiceRecordViewModel: ObservableObject {
         do {
             print("Parser: prepare audio call url=\(url.path)")
             let parsedList = try await parser.parseAudio(url: url)
-            parsedItems = parsedList.map { EditableBill(amountText: String(format: "%.2f", $0.amount), category: $0.category, note: $0.note) }
+            if parsedList.isEmpty {
+                noExpenseMessage = "语音内容似乎不是消费相关，未识别到金额或类别"
+                status = .idle
+                showNoExpenseAlert = true
+                return
+            }
+            parsedItems = parsedList.map { EditableBill(amountText: String(format: "%.2f", $0.amount), category: $0.category, note: $0.note, isIncome: $0.isIncome, incomeCategory: .otherIncome, consumedAt: $0.consumedAt) }
             print("Parser: parsed items count=\(parsedItems.count)")
             status = .done
             showConfirm = true
@@ -69,7 +84,13 @@ final class VoiceRecordViewModel: ObservableObject {
         do {
             print("Parser: prepare audio call url=\(url.path)")
             let parsedList = try await parser.parseAudio(url: url)
-            parsedItems = parsedList.map { EditableBill(amountText: String(format: "%.2f", $0.amount), category: $0.category, note: $0.note) }
+            if parsedList.isEmpty {
+                noExpenseMessage = "语音内容似乎不是消费相关，未识别到金额或类别"
+                status = .idle
+                showNoExpenseAlert = true
+                return
+            }
+            parsedItems = parsedList.map { EditableBill(amountText: String(format: "%.2f", $0.amount), category: $0.category, note: $0.note, isIncome: $0.isIncome, incomeCategory: .otherIncome, consumedAt: $0.consumedAt) }
             saveParsedBills(context: context)
         } catch {
             status = .failed("解析失败")
@@ -87,7 +108,7 @@ final class VoiceRecordViewModel: ObservableObject {
             try? encrypted.write(to: encURL)
             audioPath = encURL.path
         }
-        let bill = Bill(amount: amount, category: category, timestamp: Date(), note: note, audioPath: audioPath, transcript: transcript, syncStatus: .pending, updatedAt: Date(), isDeleted: false)
+        let bill = Bill(amount: amount, category: category, timestamp: Date(), note: note, audioPath: audioPath, transcript: transcript, syncStatus: .pending, updatedAt: Date(), isDeleted: false, isIncome: isIncome, createdAt: Date(), consumedAt: consumedAt, incomeCategory: isIncome ? incomeCategory : nil)
         context.insert(bill)
         showConfirm = false
         NotificationCenter.default.post(name: .BillsChanged, object: nil)
@@ -103,7 +124,7 @@ final class VoiceRecordViewModel: ObservableObject {
         }
         for item in parsedItems {
             let amount = Double(numericAmount(item.amountText)) ?? 0
-            let bill = Bill(amount: amount, category: item.category, timestamp: Date(), note: item.note, audioPath: audioPath, transcript: transcript, syncStatus: .pending, updatedAt: Date(), isDeleted: false)
+            let bill = Bill(amount: amount, category: item.category, timestamp: Date(), note: item.note, audioPath: audioPath, transcript: transcript, syncStatus: .pending, updatedAt: Date(), isDeleted: false, isIncome: item.isIncome, createdAt: Date(), consumedAt: item.consumedAt, incomeCategory: item.isIncome ? item.incomeCategory : nil)
             context.insert(bill)
         }
         showConfirm = false
@@ -113,7 +134,10 @@ final class VoiceRecordViewModel: ObservableObject {
 
     private func appendWave(_ level: Float) {
         waveform.append(level)
+        currentLevel = max(0, level)
+        if let t = startTime { elapsed = Date().timeIntervalSince(t) }
         if waveform.count > 100 { waveform.removeFirst(waveform.count - 100) }
+        if elapsed >= 20, status == .recording { stopRecording() }
     }
 
     private func numericAmount(_ s: String) -> String {
@@ -126,10 +150,18 @@ final class VoiceRecordViewModel: ObservableObject {
         amountText = ""
         category = .other
         note = ""
+        isIncome = false
+        incomeCategory = .otherIncome
+        consumedAt = Date()
         recordedURL = nil
         waveform.removeAll()
         status = .idle
         parsedItems.removeAll()
+        elapsed = 0
+        currentLevel = 0
+        startTime = nil
+        showNoExpenseAlert = false
+        noExpenseMessage = ""
     }
     
     func cancelConfirm() {

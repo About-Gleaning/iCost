@@ -27,8 +27,10 @@ struct BillsListView: View {
     @State private var bills: [Bill] = []
     enum TimeRange: Hashable { case day, week, month, all }
     @State private var range: TimeRange = .month
+    enum FilterDimension: Hashable { case created, consumed }
+    @State private var dimension: FilterDimension = .consumed
     private func refresh() {
-        let descriptor = FetchDescriptor<Bill>(sortBy: [SortDescriptor(\Bill.timestamp, order: .reverse)])
+        let descriptor = FetchDescriptor<Bill>(sortBy: [SortDescriptor(\Bill.consumedAt, order: .reverse)])
         if let results = try? modelContext.fetch(descriptor) { bills = results }
     }
     private var filteredBills: [Bill] {
@@ -48,12 +50,17 @@ struct BillsListView: View {
         case .all:
             start = Date.distantPast
         }
-        return bills.filter { $0.timestamp >= start }
+        switch dimension {
+        case .created:
+            return bills.filter { $0.createdAt >= start }
+        case .consumed:
+            return bills.filter { $0.consumedAt >= start }
+        }
     }
     private var groupedByDay: [(date: Date, items: [Bill])] {
         let cal = Calendar.current
-        let groups = Dictionary(grouping: filteredBills) { cal.startOfDay(for: $0.timestamp) }
-        return groups.keys.sorted(by: >).map { d in (d, groups[d]!.sorted { $0.timestamp > $1.timestamp }) }
+        let groups = Dictionary(grouping: filteredBills) { cal.startOfDay(for: (dimension == .consumed ? $0.consumedAt : $0.createdAt)) }
+        return groups.keys.sorted(by: >).map { d in (d, groups[d]!.sorted { (dimension == .consumed ? $0.consumedAt : $0.createdAt) > (dimension == .consumed ? $1.consumedAt : $1.createdAt) }) }
     }
     private var totalAmount: Double { filteredBills.reduce(0) { $0 + $1.amount } }
     var body: some View {
@@ -78,18 +85,35 @@ struct BillsListView: View {
                         .frame(maxWidth: 280)
                     }
                     .padding(.vertical, 4)
+                    HStack {
+                        Text("按时间：")
+                        Picker("维度", selection: $dimension) {
+                            Text("消费时间").tag(FilterDimension.consumed)
+                            Text("创建时间").tag(FilterDimension.created)
+                        }
+                        .pickerStyle(.segmented)
+                    }
                 }
                 ForEach(groupedByDay, id: \.date) { group in
                     Section(header: Text(group.date, format: Date.FormatStyle(date: .complete, time: .omitted))) {
                         ForEach(group.items) { bill in
                             VStack(alignment: .leading) {
                                 HStack {
-                                    Text(bill.category.cnName)
+                                    Text(bill.isIncome ? (bill.incomeCategory?.cnName ?? "收入") : bill.category.cnName)
                                     Spacer()
-                                    Text(String(format: "%.2f", bill.amount))
+                                    Text("\(bill.isIncome ? "+" : "-")\(String(format: "%.2f", bill.amount))")
+                                        .foregroundStyle(bill.isIncome ? .green : .red)
                                 }
-                                Text(bill.timestamp, format: Date.FormatStyle(date: .omitted, time: .shortened))
-                                    .foregroundStyle(.secondary)
+                                HStack {
+                                    Text("消费：")
+                                    Text(bill.consumedAt, format: .dateTime.year().month().day().hour().minute().second())
+                                }
+                                .foregroundStyle(.secondary)
+                                HStack {
+                                    Text("创建：")
+                                    Text(bill.createdAt, format: .dateTime.year().month().day().hour().minute().second())
+                                }
+                                .foregroundStyle(.secondary)
                                 if let note = bill.note { Text(note).foregroundStyle(.secondary) }
                             }
                             .swipeActions(edge: .trailing) {
@@ -107,6 +131,7 @@ struct BillsListView: View {
             .onAppear { refresh() }
             .onReceive(NotificationCenter.default.publisher(for: .BillsChanged)) { _ in refresh() }
             .navigationTitle("账单")
+            .environment(\.locale, Locale(identifier: "zh_CN"))
         }
     }
 }

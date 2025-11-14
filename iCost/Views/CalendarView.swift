@@ -37,10 +37,21 @@ struct CalendarView: View {
                         ForEach(bills) { bill in
                             VStack(alignment: .leading) {
                                 HStack {
-                                    Text(bill.category.cnName)
+                                    Text(bill.isIncome ? (bill.incomeCategory?.cnName ?? "收入") : bill.category.cnName)
                                     Spacer()
-                                    Text(String(format: "%.2f", bill.amount))
+                                    Text("\(bill.isIncome ? "+" : "-")\(String(format: "%.2f", bill.amount))")
+                                        .foregroundStyle(bill.isIncome ? .green : .red)
                                 }
+                                HStack {
+                                    Text("消费：")
+                                    Text(bill.consumedAt, format: .dateTime.year().month().day().hour().minute().second())
+                                }
+                                .foregroundStyle(.secondary)
+                                HStack {
+                                    Text("创建：")
+                                    Text(bill.createdAt, format: .dateTime.year().month().day().hour().minute().second())
+                                }
+                                .foregroundStyle(.secondary)
                                 if let note = bill.note { Text(note).foregroundStyle(.secondary) }
                             }
                         }
@@ -58,7 +69,7 @@ struct CalendarView: View {
         let cal = Calendar.current
         let start = cal.startOfDay(for: selectedDate)
         let end = cal.date(byAdding: .day, value: 1, to: start)!
-        let descriptor = FetchDescriptor<Bill>(predicate: #Predicate { $0.timestamp >= start && $0.timestamp < end }, sortBy: [SortDescriptor(\Bill.timestamp, order: .reverse)])
+        let descriptor = FetchDescriptor<Bill>(predicate: #Predicate { $0.consumedAt >= start && $0.consumedAt < end }, sortBy: [SortDescriptor(\Bill.consumedAt, order: .reverse)])
         if let results = try? modelContext.fetch(descriptor) {
             bills = results
             total = results.reduce(0) { $0 + $1.amount }

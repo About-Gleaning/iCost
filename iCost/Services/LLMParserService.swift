@@ -4,6 +4,8 @@ struct ParsedBill: Sendable {
     let amount: Double
     let category: Category
     let note: String
+    let isIncome: Bool
+    let consumedAt: Date
 }
 
 protocol BillParser: Sendable {
@@ -22,6 +24,9 @@ struct RuleBasedBillParser: BillParser {
         else if lower.contains("日用") { category = .daily }
         else if lower.contains("医") { category = .medical }
         else if lower.contains("教") { category = .education }
+        let incomeKeywords = ["收入","收款","转入","工资","退款","退回","报销"]
+        let expenseKeywords = ["消费","支付","花费","支出","购买","买"]
+        let isIncome = incomeKeywords.contains(where: { lower.contains($0) }) && !expenseKeywords.contains(where: { lower.contains($0) })
         let regex = try? NSRegularExpression(pattern: "[0-9]+(\\.[0-9]{1,2})?", options: [])
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         var results: [ParsedBill] = []
@@ -29,11 +34,11 @@ struct RuleBasedBillParser: BillParser {
             for m in matches {
                 if let r = Range(m.range, in: text) {
                     let amount = Double(text[r]) ?? 0
-                    results.append(ParsedBill(amount: amount, category: category, note: text))
+                    results.append(ParsedBill(amount: amount, category: category, note: text, isIncome: isIncome, consumedAt: Date()))
                 }
             }
         } else {
-            results.append(ParsedBill(amount: 0, category: category, note: text))
+            results.append(ParsedBill(amount: 0, category: category, note: text, isIncome: isIncome, consumedAt: Date()))
         }
         return results
     }
@@ -59,7 +64,10 @@ struct QwenBillParser: BillParser {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(cfg.apiKey)", forHTTPHeaderField: "Authorization")
-        let prompt = "请从下面的中文消费描述中抽取多笔消费，每笔包含金额(数字)、类别(中文类别)、备注(原文简要)。仅以JSON数组输出，不要包含多余文字。数组元素JSON字段为: amount(number), category(string), note(string)。输入：\(text)"
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let nowISO = fmt.string(from: Date())
+        let prompt = "请从下面的中文消费/收入描述中抽取多笔记录，每笔包含: 金额(amount: number)、类别(category: 中文字符串)、备注(note: 简要字符串)、收入标记(income: boolean，true为收入，false为支出)、消费时间(consumed_at: string，使用ISO 8601格式，如2025-11-14T20:30:00+08:00)。若用户未说明消费时间，请将consumed_at设为当前系统时间， 当前系统时间\(nowISO)。仅以JSON数组输出，不要包含多余文字。输入：\(text)"
         let body: [String: Any] = [
             "model": cfg.model,
             "messages": [
@@ -92,6 +100,9 @@ struct QwenBillParser: BillParser {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(cfg.apiKey)", forHTTPHeaderField: "Authorization")
         let dataURI = "data:audio/m4a;base64,\(b64)"
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let nowISO = fmt.string(from: Date())
         let body: [String: Any] = [
             "model": cfg.model,
             "messages": [
@@ -99,7 +110,7 @@ struct QwenBillParser: BillParser {
                     "role": "user",
                     "content": [
                         ["type": "input_audio", "input_audio": ["format": "m4a", "data": dataURI]],
-                        ["type": "text", "text": "请从以上语音内容中抽取多笔消费，每笔包含金额(数字)、类别(中文类别)、备注(原文简要)。仅以JSON数组输出，不要包含多余文字。数组元素JSON字段为: amount(number), category(string), note(string)。"]
+                        ["type": "text", "text": "请从以上语音内容中抽取多笔消费/收入记录，每笔包含: 金额(amount: number)、类别(category: 中文字符串)、备注(note: 简要字符串)、收入标记(income: boolean，true为收入，false为支出)、消费时间(consumed_at: string，使用ISO 8601格式，如2025-11-14T20:30:00+08:00)。若用户未说明消费时间，请将consumed_at设为当前系统时间 \(nowISO)。仅以JSON数组输出，不要包含多余文字。"]
                     ]
                 ]
             ],
@@ -133,17 +144,17 @@ struct QwenBillParser: BillParser {
         let s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.contains("[") && s.contains("]") {
             let json = extractJSONArray(s)
-            struct J: Decodable { let amount: Double; let category: String; let note: String? }
+            struct J: Decodable { let amount: Double; let category: String; let note: String?; let income: Bool?; let consumed_at: String? }
             guard let data = json.data(using: .utf8) else { throw NSError(domain: "Qwen", code: 5) }
             let arr = try JSONDecoder().decode([J].self, from: data)
-            let outs = arr.map { ParsedBill(amount: $0.amount, category: mapCategory($0.category), note: $0.note ?? text) }
+            let outs = arr.map { ParsedBill(amount: $0.amount, category: mapCategory($0.category), note: $0.note ?? text, isIncome: $0.income ?? false, consumedAt: parseISODate($0.consumed_at) ?? Date()) }
             return outs
         } else {
             let json = extractJSON(text)
-            struct J: Decodable { let amount: Double; let category: String; let note: String? }
+            struct J: Decodable { let amount: Double; let category: String; let note: String?; let income: Bool?; let consumed_at: String? }
             guard let data = json.data(using: .utf8) else { throw NSError(domain: "Qwen", code: 6) }
             let j = try JSONDecoder().decode(J.self, from: data)
-            let out = ParsedBill(amount: j.amount, category: mapCategory(j.category), note: j.note ?? text)
+            let out = ParsedBill(amount: j.amount, category: mapCategory(j.category), note: j.note ?? text, isIncome: j.income ?? false, consumedAt: parseISODate(j.consumed_at) ?? Date())
             return [out]
         }
     }
@@ -165,5 +176,12 @@ struct QwenBillParser: BillParser {
         if lower.contains("医") { return .medical }
         if lower.contains("教") { return .education }
         return .other
+    }
+
+    private func parseISODate(_ s: String?) -> Date? {
+        guard let s = s else { return nil }
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fmt.date(from: s) ?? ISO8601DateFormatter().date(from: s)
     }
 }

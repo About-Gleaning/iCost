@@ -16,13 +16,33 @@ struct VoiceRecordView: View {
         ZStack {
             VStack(spacing: 16) {
                 if mode == .audio {
-                    if vm.status == .processing {
-                        ProgressView("正在解析音频…")
+                    let seconds = Int(vm.elapsed)
+                    VStack(spacing: 8) {
+                        HStack {
+                            Label(vm.status == .recording ? "录音中" : (vm.status == .processing ? "正在解析音频…" : "按住开始录音"), systemImage: vm.status == .recording ? "record.circle" : (vm.status == .processing ? "wave.3" : "mic"))
+                                .foregroundStyle(vm.status == .recording ? .red : .secondary)
+                            Spacer()
+                            Text(String(format: "%02d:%02d", seconds/60, seconds%60))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Gauge(value: min(max(Double(vm.currentLevel), 0), 1)) {
+                            Text("输入电平")
+                        }
+                        .gaugeStyle(.linearCapacity)
                     }
+                    .padding()
+                    .background(.thinMaterial)
+                    .cornerRadius(12)
+                    .padding(.horizontal)
+                    Spacer(minLength: 80)
                     Circle()
-                        .fill(vm.status == .recording ? Color.red : Color.accentColor)
+                        .fill(vm.status == .recording ? Color.red : Color.clear)
+                        .background(Circle().fill(.ultraThinMaterial))
+                        .overlay(Circle().stroke(vm.status == .recording ? Color.red : Color.accentColor, lineWidth: 2))
+                        .shadow(radius: 8)
                         .frame(width: 120, height: 120)
-                        .overlay(Image(systemName: "mic.fill").foregroundStyle(.white))
+                        .overlay(Image(systemName: "mic.fill").foregroundStyle(vm.status == .recording ? .white : .accentColor))
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { _ in
@@ -32,8 +52,15 @@ struct VoiceRecordView: View {
                                     vm.stopRecording()
                                 }
                         )
-                    Text("按住开始录音，松开结束并确认")
-                        .foregroundStyle(.secondary)
+                        .padding(.top, 64)
+                    if vm.status == .done {
+                        Button("重新录制") { vm.restartRecording() }
+                            .buttonStyle(.bordered)
+                    }
+                    if case .failed = vm.status {
+                        Button("重新录制") { vm.restartRecording() }
+                            .buttonStyle(.bordered)
+                    }
                 } else {
                     Form {
                         Section("消费信息") {
@@ -53,12 +80,31 @@ struct VoiceRecordView: View {
                             }
                         }
                         Section("类别") {
-                            Picker("类别", selection: $vm.category) {
-                                ForEach(Category.allCases, id: \.self) { c in
-                                    Text(c.cnName).tag(c)
+                            if vm.isIncome {
+                                Picker("类别", selection: $vm.incomeCategory) {
+                                    ForEach(IncomeCategory.allCases, id: \.self) { c in
+                                        Text(c.cnName).tag(c)
+                                    }
                                 }
+                                .pickerStyle(.menu)
+                            } else {
+                                Picker("类别", selection: $vm.category) {
+                                    ForEach(Category.allCases, id: \.self) { c in
+                                        Text(c.cnName).tag(c)
+                                    }
+                                }
+                                .pickerStyle(.menu)
                             }
-                            .pickerStyle(.menu)
+                        }
+                        Section("类型") {
+                            Picker("类型", selection: $vm.isIncome) {
+                                Text("支出").tag(false)
+                                Text("收入").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                        Section("消费时间") {
+                            DatePicker("时间", selection: $vm.consumedAt, displayedComponents: [.date, .hourAndMinute])
                         }
                         Section("备注") {
                             TextField("备注", text: $vm.note)
@@ -94,6 +140,13 @@ struct VoiceRecordView: View {
                 Spacer()
                 Button("完成") { amountFocused = false; noteFocused = false }
             }
+        }
+        .alert("未识别到消费信息", isPresented: $vm.showNoExpenseAlert) {
+            Button("重新录制", role: .destructive) { vm.restartRecording() }
+            Button("改为手动录入") { mode = .manual }
+            Button("忽略", role: .cancel) {}
+        } message: {
+            Text(vm.noExpenseMessage)
         }
         .sheet(isPresented: $vm.showConfirm) {
             ConfirmSheetView(vm: vm)
@@ -135,12 +188,27 @@ struct ConfirmSheetView: View {
                                         }
                                     }
                             }
-                            Picker("类别", selection: $item.category) {
-                                ForEach(Category.allCases, id: \.self) { c in
-                                    Text(c.cnName).tag(c)
+                            if item.isIncome {
+                                Picker("类别", selection: $item.incomeCategory) {
+                                    ForEach(IncomeCategory.allCases, id: \.self) { c in
+                                        Text(c.cnName).tag(c)
+                                    }
                                 }
+                                .pickerStyle(.menu)
+                            } else {
+                                Picker("类别", selection: $item.category) {
+                                    ForEach(Category.allCases, id: \.self) { c in
+                                        Text(c.cnName).tag(c)
+                                    }
+                                }
+                                .pickerStyle(.menu)
                             }
-                            .pickerStyle(.menu)
+                            DatePicker("消费时间", selection: $item.consumedAt, displayedComponents: [.date, .hourAndMinute])
+                            Picker("类型", selection: $item.isIncome) {
+                                Text("支出").tag(false)
+                                Text("收入").tag(true)
+                            }
+                            .pickerStyle(.segmented)
                             TextField("备注", text: $item.note)
                         }
                         .padding(.vertical, 6)
