@@ -11,6 +11,8 @@ final class VoiceRecordViewModel: ObservableObject {
     @Published var category: Category = Category.other
     @Published var note: String = ""
     @Published var showConfirm: Bool = false
+    struct EditableBill: Identifiable, Sendable { let id: UUID = UUID(); var amountText: String; var category: Category; var note: String }
+    @Published var parsedItems: [EditableBill] = []
 
     private let recorder = AudioRecorderService()
     private let speech = SpeechService()
@@ -44,11 +46,10 @@ final class VoiceRecordViewModel: ObservableObject {
         guard let url = recordedURL else { return }
         do {
             print("Parser: prepare audio call url=\(url.path)")
-            let parsed = try await parser.parseAudio(url: url)
-            amountText = String(format: "%.2f", parsed.amount)
-            category = parsed.category
-            note = parsed.note
-            print("Parser: parsed amount=\(parsed.amount) category=\(parsed.category.rawValue) note=\(parsed.note)")
+            let parsedList = try await parser.parseAudio(url: url)
+            parsedItems = parsedList.map { EditableBill(amountText: String(format: "%.2f", $0.amount), category: $0.category, note: $0.note) }
+            print("Parser: parsed items count=\(parsedItems.count)")
+            status = .done
             showConfirm = true
         } catch {
             status = .failed("解析失败")
@@ -67,12 +68,9 @@ final class VoiceRecordViewModel: ObservableObject {
         guard let url = recordedURL else { return }
         do {
             print("Parser: prepare audio call url=\(url.path)")
-            let parsed = try await parser.parseAudio(url: url)
-            amountText = String(format: "%.2f", parsed.amount)
-            category = parsed.category
-            note = parsed.note
-            print("Parser: parsed amount=\(parsed.amount) category=\(parsed.category.rawValue) note=\(parsed.note)")
-            saveBill(context: context)
+            let parsedList = try await parser.parseAudio(url: url)
+            parsedItems = parsedList.map { EditableBill(amountText: String(format: "%.2f", $0.amount), category: $0.category, note: $0.note) }
+            saveParsedBills(context: context)
         } catch {
             status = .failed("解析失败")
             print("Parser: error=\(error.localizedDescription)")
@@ -96,6 +94,23 @@ final class VoiceRecordViewModel: ObservableObject {
         resetInputs()
     }
 
+    func saveParsedBills(context: ModelContext) {
+        var audioPath: String? = recordedURL?.path
+        if let url = recordedURL, let data = try? Data(contentsOf: url), let encrypted = try? EncryptionService.encrypt(data: data) {
+            let encURL = FilePaths.audioDirectory().appendingPathComponent(UUID().uuidString).appendingPathExtension("enc")
+            try? encrypted.write(to: encURL)
+            audioPath = encURL.path
+        }
+        for item in parsedItems {
+            let amount = Double(numericAmount(item.amountText)) ?? 0
+            let bill = Bill(amount: amount, category: item.category, timestamp: Date(), note: item.note, audioPath: audioPath, transcript: transcript, syncStatus: .pending, updatedAt: Date(), isDeleted: false)
+            context.insert(bill)
+        }
+        showConfirm = false
+        NotificationCenter.default.post(name: .BillsChanged, object: nil)
+        resetInputs()
+    }
+
     private func appendWave(_ level: Float) {
         waveform.append(level)
         if waveform.count > 100 { waveform.removeFirst(waveform.count - 100) }
@@ -114,20 +129,17 @@ final class VoiceRecordViewModel: ObservableObject {
         recordedURL = nil
         waveform.removeAll()
         status = .idle
+        parsedItems.removeAll()
     }
     
     func cancelConfirm() {
         showConfirm = false
+        status = .idle
     }
 
     func restartRecording() {
         showConfirm = false
-        transcript = ""
-        amountText = ""
-        category = .other
-        note = ""
-        recordedURL = nil
-        waveform.removeAll()
+        resetInputs()
         startRecording()
     }
 }

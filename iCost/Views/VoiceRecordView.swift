@@ -6,6 +6,12 @@ struct VoiceRecordView: View {
     @StateObject private var vm = VoiceRecordViewModel()
     enum InputMode: Hashable { case audio, manual }
     @State private var mode: InputMode = .audio
+    @FocusState private var amountFocused: Bool
+    @FocusState private var noteFocused: Bool
+    private var isValidAmount: Bool {
+        if let r = vm.amountText.range(of: "[0-9]+(\\.[0-9]{1,2})?", options: .regularExpression) { return Double(vm.amountText[r]) ?? 0 > 0 }
+        return false
+    }
     var body: some View {
         ZStack {
             VStack(spacing: 16) {
@@ -30,19 +36,23 @@ struct VoiceRecordView: View {
                         .foregroundStyle(.secondary)
                 } else {
                     Form {
-                        Section {
-                            TextField("金额", text: $vm.amountText)
-                                .keyboardType(.decimalPad)
-                                .onChange(of: vm.amountText) { _, newValue in
-                                    if let r = newValue.range(of: "[0-9]+(\\.[0-9]{1,2})?", options: .regularExpression) {
-                                        let num = String(newValue[r])
-                                        if num != newValue { vm.amountText = num }
-                                    } else {
-                                        vm.amountText = ""
+                        Section("消费信息") {
+                            HStack(spacing: 8) {
+                                Text("¥")
+                                TextField("金额", text: $vm.amountText)
+                                    .keyboardType(.decimalPad)
+                                    .focused($amountFocused)
+                                    .onChange(of: vm.amountText) { _, newValue in
+                                        if let r = newValue.range(of: "[0-9]+(\\.[0-9]{1,2})?", options: .regularExpression) {
+                                            let num = String(newValue[r])
+                                            if num != newValue { vm.amountText = num }
+                                        } else {
+                                            vm.amountText = ""
+                                        }
                                     }
-                                }
+                            }
                         }
-                        Section {
+                        Section("类别") {
                             Picker("类别", selection: $vm.category) {
                                 ForEach(Category.allCases, id: \.self) { c in
                                     Text(c.cnName).tag(c)
@@ -50,18 +60,27 @@ struct VoiceRecordView: View {
                             }
                             .pickerStyle(.menu)
                         }
-                        Section {
+                        Section("备注") {
                             TextField("备注", text: $vm.note)
+                                .focused($noteFocused)
                         }
                         Section {
-                            Button("保存") { vm.saveBill(context: modelContext) }
+                            HStack {
+                                Button("保存") { vm.saveBill(context: modelContext) }
+                                    .buttonStyle(.borderedProminent)
+                                    .disabled(!isValidAmount)
+                                Button("清空") {
+                                    vm.amountText = ""
+                                    vm.category = .other
+                                    vm.note = ""
+                                }
+                            }
                         }
                     }
                 }
             }
             .padding()
             .navigationTitle("语音账单")
-            if vm.showConfirm { confirmOverlay }
         }
         .toolbar {
             ToolbarItem(placement: .bottomBar) {
@@ -71,48 +90,74 @@ struct VoiceRecordView: View {
                 }
                 .pickerStyle(.segmented)
             }
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") { amountFocused = false; noteFocused = false }
+            }
+        }
+        .sheet(isPresented: $vm.showConfirm) {
+            ConfirmSheetView(vm: vm)
+                .presentationDetents([.medium, .large])
         }
     }
 }
 
-extension VoiceRecordView {
-    private var confirmOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.35).ignoresSafeArea()
+struct ConfirmSheetView: View {
+    @Environment(\.modelContext) private var modelContext
+    @ObservedObject var vm: VoiceRecordViewModel
+    var totalAmount: Double {
+        vm.parsedItems.reduce(0) { $0 + (Double($1.amountText) ?? 0) }
+    }
+    var body: some View {
+        NavigationView {
             VStack(spacing: 12) {
-                Text("请确认解析结果").font(.headline)
-                TextField("金额", text: $vm.amountText)
-                    .textFieldStyle(.roundedBorder)
-                    .keyboardType(.decimalPad)
-                    .onChange(of: vm.amountText) { _, newValue in
-                        if let r = newValue.range(of: "[0-9]+(\\.[0-9]{1,2})?", options: .regularExpression) {
-                            let num = String(newValue[r])
-                            if num != newValue { vm.amountText = num }
-                        } else {
-                            vm.amountText = ""
+                HStack {
+                    Text("已解析 \(vm.parsedItems.count) 笔")
+                        .font(.headline)
+                    Spacer()
+                    Text("总计 ¥\(String(format: "%.2f", totalAmount))")
+                        .font(.headline)
+                }
+                .padding(.horizontal)
+                List {
+                    ForEach($vm.parsedItems) { $item in
+                        VStack(spacing: 8) {
+                            HStack(spacing: 8) {
+                                Text("¥")
+                                TextField("金额", text: $item.amountText)
+                                    .keyboardType(.decimalPad)
+                                    .onChange(of: item.amountText) { _, newValue in
+                                        if let r = newValue.range(of: "[0-9]+(\\.[0-9]{1,2})?", options: .regularExpression) {
+                                            let num = String(newValue[r])
+                                            if num != newValue { item.amountText = num }
+                                        } else {
+                                            item.amountText = ""
+                                        }
+                                    }
+                            }
+                            Picker("类别", selection: $item.category) {
+                                ForEach(Category.allCases, id: \.self) { c in
+                                    Text(c.cnName).tag(c)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            TextField("备注", text: $item.note)
                         }
-                    }
-                Picker("类别", selection: $vm.category) {
-                    ForEach(Category.allCases, id: \.self) { c in
-                        Text(c.cnName).tag(c)
+                        .padding(.vertical, 6)
                     }
                 }
-                .pickerStyle(.menu)
-                TextField("备注", text: $vm.note)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Button("确认保存") { vm.saveBill(context: modelContext) }
-                        .buttonStyle(.borderedProminent)
+                .listStyle(.insetGrouped)
+            }
+            .navigationTitle("确认保存")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { vm.cancelConfirm() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存全部") { vm.saveParsedBills(context: modelContext) }
+                        .buttonStyle(.borderedProminent)
+                }
             }
-            .padding()
-            .background(.thinMaterial)
-            .cornerRadius(12)
-            .shadow(radius: 10)
-            .frame(maxWidth: 360)
         }
-        .transition(.opacity)
-        .animation(.easeInOut, value: vm.showConfirm)
     }
 }

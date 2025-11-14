@@ -8,30 +8,46 @@ struct CalendarView: View {
     @State private var total: Double = 0
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             DatePicker("选择日期", selection: $selectedDate, displayedComponents: [.date])
                 .datePickerStyle(.graphical)
                 .onChange(of: selectedDate) { _, _ in fetch() }
 
             HStack {
-                Text(selectedDate, format: .dateTime.year().month().day())
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(selectedDate, format: .dateTime.year().month().day())
+                        .font(.headline)
+                    Text("\(bills.count) 笔 · ¥\(String(format: "%.2f", total))")
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
-                Text(String(format: "当日总额：¥%.2f", total))
             }
             .padding(.horizontal)
 
             List {
-                ForEach(bills) { bill in
-                    VStack(alignment: .leading) {
-                        HStack {
-                            Text(bill.category.cnName)
-                            Spacer()
-                            Text(String(format: "%.2f", bill.amount))
+                if bills.isEmpty {
+                    VStack(alignment: .center) {
+                        Text("当日暂无记录")
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 32)
+                    }
+                } else {
+                    Section(header: Text("当日账单")) {
+                        ForEach(bills) { bill in
+                            VStack(alignment: .leading) {
+                                HStack {
+                                    Text(bill.category.cnName)
+                                    Spacer()
+                                    Text(String(format: "%.2f", bill.amount))
+                                }
+                                if let note = bill.note { Text(note).foregroundStyle(.secondary) }
+                            }
                         }
-                        if let note = bill.note { Text(note).foregroundStyle(.secondary) }
                     }
                 }
             }
+            .listStyle(.insetGrouped)
         }
         .onAppear { fetch() }
         .navigationTitle("日历")
