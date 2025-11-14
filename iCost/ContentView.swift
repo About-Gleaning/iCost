@@ -13,7 +13,7 @@ struct ContentView: View {
     var body: some View {
         TabView {
             BillsListView()
-                .tabItem { Label("随笔", systemImage: "list.bullet") }
+                .tabItem { Label("账单", systemImage: "list.bullet") }
             VoiceRecordView()
                 .tabItem { Label("AI", systemImage: "mic") }
             CalendarView()
